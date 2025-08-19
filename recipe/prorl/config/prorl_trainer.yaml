@@ -1,0 +1,165 @@
+# ProRL: Prolonged Reinforcement Learning Configuration
+# Based on the paper: "ProRL: Prolonged Reinforcement Learning Expands 
+# Reasoning Boundaries in Large Language Models"
+
+# @package _global_
+defaults:
+  - /trainer@: ppo_trainer
+  - /actor_rollout_ref@: ppo_trainer
+  - /critic@: ppo_trainer
+  - /data@: legacy_data
+  - /reward_model@: reward_model
+  - override /trainer/logger: console
+
+# Training configuration
+trainer:
+  project_name: "ProRL"
+  experiment_name: "prorl_qwen_reasoning"
+  logger: console
+  total_epochs: 20  # Prolonged training as per paper
+  save_freq: 100
+  val_freq: 50
+  val_before_train: true
+  val_only: false
+  nnodes: 1
+  n_gpus_per_node: 8
+
+# Data configuration for diverse task training
+data:
+  train_files:
+    # Math datasets
+    - "path/to/math_problems.jsonl"
+    # Code datasets  
+    - "path/to/code_problems.jsonl"
+    # STEM reasoning
+    - "path/to/stem_problems.jsonl"
+    # Logic puzzles
+    - "path/to/logic_puzzles.jsonl"
+    # Instruction following
+    - "path/to/instruction_following.jsonl"
+  
+  val_files:
+    - "path/to/validation_data.jsonl"
+    
+  train_batch_size: 256  # Global batch size for prompts
+  max_prompt_length: 2048
+  max_response_length: 8192  # Start with 8k, increase to 16k later
+  truncate_token: eos
+  
+# Algorithm configuration - Enhanced GRPO with ProRL features
+algorithm:
+  # Use GRPO as base algorithm
+  adv_estimator: grpo
+  use_kl_in_reward: true
+  
+  # ProRL: KL divergence control
+  kl_control:
+    initial_coef: 0.01
+    target_kl: 0.05
+    adaptive: true
+    min_coef: 0.001
+    max_coef: 0.1
+  
+  # ProRL: Reference policy reset
+  reference_reset:
+    interval: 100  # Reset every 100 steps
+    kl_threshold: 0.1  # Reset if KL exceeds this
+    performance_degradation: true
+    validation_metric: "reward"
+  
+  # DAPO: Dynamic sampling for stability
+  filter_groups:
+    enable: true
+    metric: "acc"
+    max_num_gen_batches: 10
+  
+  # ProRL: Prolonged training settings
+  prolonged_training:
+    enable: true
+    context_expansion:
+      initial_length: 8192
+      final_length: 16384
+      expansion_step: 1500  # When to expand context
+    
+    # Curriculum learning for prolonged training
+    curriculum:
+      enable: true
+      initial_difficulty: "easy"
+      progression_steps: [500, 1000, 1500]
+
+# Actor configuration with DAPO enhancements
+actor_rollout_ref:
+  rollout:
+    n: 16  # Group sampling for GRPO
+    temperature: 1.2  # High temperature for exploration
+    do_sample: true
+    top_p: 0.95
+    
+  actor:
+    strategy: fsdp
+    ppo_epochs: 1
+    ppo_mini_batch_size: 64
+    ppo_micro_batch_size_per_gpu: 4
+    clip_ratio: 0.2
+    
+    # DAPO: Decoupled clipping
+    clip_ratio_low: 0.2
+    clip_ratio_high: 0.28  # Clip-higher for exploration
+    
+    # ProRL: KL loss for regularization
+    use_kl_loss: true
+    kl_loss_coef: 0.001
+    kl_loss_type: "low_var_kl"
+    
+    # DAPO: Token-level loss aggregation
+    loss_agg_mode: "token-mean"
+    
+    # Optimization settings
+    optim:
+      lr: 2e-6  # Constant learning rate as per paper
+      lr_scheduler_type: constant
+      weight_decay: 0.0
+      warmup_steps: 0
+      
+  model:
+    # Model path - update this to your base model
+    path: "models/DeepSeek-R1-Distill-Qwen-1.5B"
+    
+  fsdp_config:
+    param_dtype: bfloat16
+    reduce_dtype: float32
+    buffer_dtype: float32
+
+# Critic configuration (GRPO doesn't use critic, but kept for compatibility)
+critic:
+  strategy: fsdp
+  ppo_epochs: 1
+  ppo_mini_batch_size: 64
+  ppo_micro_batch_size_per_gpu: 4
+  optim:
+    lr: 2e-6
+    weight_decay: 0.0
+  model:
+    path: "models/DeepSeek-R1-Distill-Qwen-1.5B"
+
+# Reward model configuration for diverse tasks
+reward_model:
+  enable: false  # Use function-based rewards for diverse tasks
+  strategy: fsdp
+  
+  # DAPO: Overlong reward shaping
+  overlong_buffer:
+    enable: true
+    len: 4096
+    penalty_factor: 1.0
+
+# Global profiling
+global_profiler:
+  tool: null
+  steps: []
+
+# Ray configuration
+ray_kwargs:
+  ray_init:
+    num_cpus: 32
+    object_store_memory: 50000000000  # 50GB
